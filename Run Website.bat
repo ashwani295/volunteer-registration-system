@@ -44,7 +44,7 @@ if exist "%FRONTEND_DIR%\node_modules\typescript\bin\tsc" (
   popd
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$backend = Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction SilentlyContinue; if (-not $backend) { $env:MONGO_URI='mongodb://localhost:27017/volunteer-system'; $env:JWT_SECRET='your_jwt_secret_here'; $env:PORT='5000'; Start-Process -FilePath 'node.exe' -ArgumentList 'server.js' -WorkingDirectory '%BACKEND_DIR%' -WindowStyle Hidden; }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$backend = Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction SilentlyContinue; if (-not $backend) { Start-Process -FilePath 'node.exe' -ArgumentList 'server.js' -WorkingDirectory '%BACKEND_DIR%' -WindowStyle Hidden; }"
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$frontend = Get-NetTCPConnection -LocalPort 3001 -State Listen -ErrorAction SilentlyContinue; if (-not $frontend) { Start-Process -FilePath 'node.exe' -ArgumentList 'server.js' -WorkingDirectory '%FRONTEND_DIR%' -WindowStyle Hidden; }"
 
