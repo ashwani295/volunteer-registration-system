@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VolunteerHub - Real-time Volunteer Management</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body>
+  <!-- Loading Screen -->
+  <div id="loading-screen" class="loading-screen">
+    <div class="loading-spinner">
+      <div class="spinner"></div>
+      <p>Loading VolunteerHub...</p>
+    </div>
+  </div>
+
+  <!-- Header -->
+  <header class="modern-header">
+    <div class="header-content">
+      <div class="logo">
+        <i class="fas fa-hands-helping"></i>
+        <span>VolunteerHub</span>
+      </div>
+      <nav class="nav-menu">
+        <a href="#" id="home-link" class="nav-link active">
+          <i class="fas fa-home"></i>
+          <span>Home</span>
+        </a>
+        <a href="#" id="events-link" class="nav-link">
+          <i class="fas fa-calendar-alt"></i>
+          <span>Events</span>
+        </a>
+        <a href="#" id="dashboard-link" class="nav-link" style="display:none;">
+          <i class="fas fa-tachometer-alt"></i>
+          <span>Dashboard</span>
+        </a>
+        <a href="#" id="admin-link" class="nav-link" style="display:none;">
+          <i class="fas fa-cog"></i>
+          <span>Admin</span>
+        </a>
+      </nav>
+      <div class="user-menu">
+        <button id="login-btn" class="btn btn-primary">
+          <i class="fas fa-sign-in-alt"></i>
+          Login
+        </button>
+        <button id="register-btn" class="btn btn-secondary">
+          <i class="fas fa-user-plus"></i>
+          Register
+        </button>
+        <div id="user-profile" class="user-profile" style="display:none;">
+          <div class="user-avatar">
+            <i class="fas fa-user-circle"></i>
+          </div>
+          <span id="user-name"></span>
+          <button id="logout-btn" class="btn btn-ghost">
+            <i class="fas fa-sign-out-alt"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="main-content">
+    <!-- Hero Section -->
+    <section id="hero-section" class="hero-section">
+      <!-- Guest Hero Content -->
+      <div id="guest-hero" class="hero-content">
+        <h1 class="hero-title">
+          <span class="gradient-text">Make a Difference</span>
+          <br>Today
+        </h1>
+        <p class="hero-subtitle">
+          Join thousands of volunteers creating positive change in communities worldwide.
+          Find events, connect with organizers, and start your volunteering journey.
+        </p>
+        <div class="hero-stats">
+          <div class="stat-item">
+            <div class="stat-number" id="total-events">0</div>
+            <div class="stat-label">Active Events</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-number" id="total-volunteers">0</div>
+            <div class="stat-label">Volunteers</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-number" id="total-organizations">0</div>
+            <div class="stat-label">Organizations</div>
+          </div>
+        </div>
+        <div class="hero-actions">
+          <button id="explore-events-btn" class="btn btn-primary btn-large">
+            <i class="fas fa-search"></i>
+            Explore Events
+          </button>
+          <button id="become-organizer-btn" class="btn btn-outline btn-large">
+            <i class="fas fa-building"></i>
+            Become Organizer
+          </button>
+        </div>
+      </div>
+
+      <!-- Volunteer Hero Content -->
+      <div id="volunteer-hero" class="hero-content" style="display: none;">
+        <h1 class="hero-title">
+          <span class="gradient-text">Welcome Back</span>
+          <br><span id="volunteer-name-display">Volunteer</span>
+        </h1>
+        <p class="hero-subtitle">
+          Ready to make a difference? Browse events organized by our community admins and join the causes that matter to you.
+        </p>
+        <div class="hero-stats">
+          <div class="stat-item">
+            <div class="stat-number" id="volunteer-events-count">0</div>
+            <div class="stat-label">Your Events</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-number" id="available-events-count">0</div>
+            <div class="stat-label">Available Events</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-number" id="total-organizers-count">0</div>
+            <div class="stat-label">Active Organizers</div>
+          </div>
+        </div>
+        <div class="hero-actions">
+          <button id="browse-events-btn" class="btn btn-primary btn-large">
+            <i class="fas fa-search"></i>
+            Browse Events
+          </button>
+          <button id="view-dashboard-btn" class="btn btn-outline btn-large">
+            <i class="fas fa-tachometer-alt"></i>
+            My Dashboard
+          </button>
+        </div>
+      </div>
+
+      <!-- Admin Hero Content -->
+      <div id="admin-hero" class="hero-content" style="display: none;">
+        <h1 class="hero-title">
+          <span class="gradient-text">Admin Dashboard</span>
+          <br><span id="admin-name-display">Admin</span>
+        </h1>
+        <p class="hero-subtitle">
+          Manage your events and help volunteers find meaningful opportunities in your community.
+        </p>
+        <div class="hero-stats">
+          <div class="stat-item">
+            <div class="stat-number" id="admin-events-count">0</div>
+            <div class="stat-label">Your Events</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-number" id="admin-volunteers-count">0</div>
+            <div class="stat-label">Total Volunteers</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-number" id="admin-participation-count">0</div>
+            <div class="stat-label">Total Participation</div>
+          </div>
+        </div>
+        <div class="hero-actions">
+          <button id="create-event-btn" class="btn btn-primary btn-large">
+            <i class="fas fa-plus"></i>
+            Create Event
+          </button>
+          <button id="manage-events-btn" class="btn btn-outline btn-large">
+            <i class="fas fa-cog"></i>
+            Manage Events
+          </button>
+        </div>
+      </div>
+      <div class="hero-visual">
+        <div class="floating-elements">
+          <div class="floating-card card-1">
+            <i class="fas fa-heart"></i>
+            <span>Community</span>
+          </div>
+          <div class="floating-card card-2">
+            <i class="fas fa-users"></i>
+            <span>Teamwork</span>
+          </div>
+          <div class="floating-card card-3">
+            <i class="fas fa-globe"></i>
+            <span>Impact</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Events Section -->
+    <section id="events-section" class="events-section" style="display:none;">
+      <div class="section-header">
+        <h2 class="section-title">
+          <i class="fas fa-calendar-alt"></i>
+          Available Events
+        </h2>
+        <div class="section-actions">
+          <div class="filter-tabs">
+            <button class="filter-tab active" data-filter="all">All Events</button>
+            <button class="filter-tab" data-filter="available">Available</button>
+            <button class="filter-tab" data-filter="my-events">My Events</button>
+          </div>
+          <div class="search-box">
+            <i class="fas fa-search"></i>
+            <input type="text" placeholder="Search events..." id="event-search">
+          </div>
+        </div>
+      </div>
+      <div id="events-grid" class="events-grid">
+        <!-- Events will be loaded here -->
+      </div>
+    </section>
+
+    <!-- Dashboard Section -->
+    <section id="dashboard-section" class="dashboard-section" style="display:none;">
+      <div class="section-header">
+        <h2 class="section-title">
+          <i class="fas fa-tachometer-alt"></i>
+          My Dashboard
+        </h2>
+      </div>
+      <div class="dashboard-grid">
+        <div class="dashboard-card">
+          <div class="card-header">
+            <i class="fas fa-calendar-check"></i>
+            <h3>My Events</h3>
+          </div>
+          <div id="my-events-list" class="card-content">
+            <!-- My events will be loaded here -->
+          </div>
+        </div>
+        <div class="dashboard-card">
+          <div class="card-header">
+            <i class="fas fa-chart-line"></i>
+            <h3>Activity Stats</h3>
+          </div>
+          <div class="card-content">
+            <div class="stat-row">
+              <span>Events Participated:</span>
+              <span id="events-participated">0</span>
+            </div>
+            <div class="stat-row">
+              <span>Hours Volunteered:</span>
+              <span id="hours-volunteered">0</span>
+            </div>
+            <div class="stat-row">
+              <span>Certificates Earned:</span>
+              <span id="certificates-earned">0</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Admin Section -->
+    <section id="admin-section" class="admin-section" style="display:none;">
+      <div class="section-header">
+        <h2 class="section-title">
+          <i class="fas fa-cog"></i>
+          Admin Panel
+        </h2>
+        <button id="create-event-btn" class="btn btn-primary">
+          <i class="fas fa-plus"></i>
+          Create Event
+        </button>
+      </div>
+      <div class="admin-tabs">
+        <button class="admin-tab active" data-tab="events">Manage Events</button>
+        <button class="admin-tab" data-tab="users">Manage Users</button>
+        <button class="admin-tab" data-tab="stats">Statistics</button>
+      </div>
+      <div id="admin-content" class="admin-content">
+        <!-- Admin content will be loaded here -->
+      </div>
+    </section>
+  </main>
+
+  <!-- Modals -->
+  <div id="modal-overlay" class="modal-overlay" style="display:none;">
+    <!-- Login Modal -->
+    <div id="login-modal" class="modal" style="display:none;">
+      <div class="modal-header">
+        <h3>Login to VolunteerHub</h3>
+        <button class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="login-form" class="auth-form">
+          <div class="form-group">
+            <label for="login-email">Email</label>
+            <input type="email" id="login-email" name="email" required>
+          </div>
+          <div class="form-group">
+            <label for="login-password">Password</label>
+            <input type="password" id="login-password" name="password" required>
+          </div>
+          <button type="submit" class="btn btn-primary btn-full">
+            <span class="btn-text">Login</span>
+            <div class="btn-spinner" style="display:none;"></div>
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Register Modal -->
+    <div id="register-modal" class="modal" style="display:none;">
+      <div class="modal-header">
+        <h3>Join VolunteerHub</h3>
+        <button class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="register-form" class="auth-form">
+          <div class="form-group">
+            <label for="register-name">Full Name</label>
+            <input type="text" id="register-name" name="name" required>
+          </div>
+          <div class="form-group">
+            <label for="register-email">Email</label>
+            <input type="email" id="register-email" name="email" required>
+          </div>
+          <div class="form-group">
+            <label for="register-password">Password</label>
+            <input type="password" id="register-password" name="password" required>
+          </div>
+          <div class="form-group">
+            <label for="register-role">I want to</label>
+            <select id="register-role" name="role" required>
+              <option value="volunteer">Volunteer</option>
+              <option value="admin">Organize Events</option>
+            </select>
+          </div>
+          <button type="submit" class="btn btn-primary btn-full">
+            <span class="btn-text">Create Account</span>
+            <div class="btn-spinner" style="display:none;"></div>
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Event Details Modal -->
+    <div id="event-modal" class="modal" style="display:none;">
+      <div class="modal-header">
+        <h3 id="event-modal-title">Event Details</h3>
+        <button class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body" id="event-modal-body">
+        <!-- Event details will be loaded here -->
+      </div>
+    </div>
+
+    <!-- Create Event Modal -->
+    <div id="create-event-modal" class="modal" style="display:none;">
+      <div class="modal-header">
+        <h3>Create New Event</h3>
+        <button class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="create-event-form" class="event-form">
+          <div class="form-group">
+            <label for="event-title">Event Title</label>
+            <input type="text" id="event-title" name="title" required>
+          </div>
+          <div class="form-group">
+            <label for="event-description">Description</label>
+            <textarea id="event-description" name="description" rows="3"></textarea>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="event-date">Date</label>
+              <input type="date" id="event-date" name="date" required>
+            </div>
+            <div class="form-group">
+              <label for="event-start-time">Start Time</label>
+              <input type="time" id="event-start-time" name="startTime" required>
+            </div>
+            <div class="form-group">
+              <label for="event-end-time">End Time</label>
+              <input type="time" id="event-end-time" name="endTime" required>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="event-location">Location</label>
+            <input type="text" id="event-location" name="location" required>
+          </div>
+          <div class="form-group">
+            <label for="event-volunteers">Required Volunteers</label>
+            <input type="number" id="event-volunteers" name="volunteers" min="1" value="1" required>
+          </div>
+          <button type="submit" class="btn btn-primary btn-full">
+            <span class="btn-text">Create Event</span>
+            <div class="btn-spinner" style="display:none;"></div>
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Notifications -->
+  <div id="notifications" class="notifications">
+    <!-- Notifications will appear here -->
+  </div>
+
+  <!-- Scripts -->
+  <script src="js/app.js"></script>
+</body>
+</html>
