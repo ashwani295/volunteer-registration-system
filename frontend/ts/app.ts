@@ -18,6 +18,7 @@ interface Event {
   location: string;
   requiredVolunteers: number;
   volunteers: User[];
+  pendingVolunteers: User[];
   createdBy: User;
   createdAt: string;
 }
@@ -38,6 +39,18 @@ let currentUser: User | null = null;
 let token: string | null = null;
 let socket: any = null;
 let currentSection: string = 'hero';
+
+function normalizeEvent(event: Event): Event {
+  return {
+    ...event,
+    volunteers: (event.volunteers || []).filter(Boolean),
+    pendingVolunteers: (event.pendingVolunteers || []).filter(Boolean)
+  };
+}
+
+function normalizeEvents(events: Event[]): Event[] {
+  return events.map(normalizeEvent);
+}
 
 // DOM elements
 const heroSection = document.getElementById('hero-section') as HTMLElement;
@@ -85,7 +98,7 @@ const totalVolunteersStat = document.getElementById('total-volunteers') as HTMLE
 const totalOrganizationsStat = document.getElementById('total-organizations') as HTMLElement;
 
 // Admin elements
-const createEventBtn = document.getElementById('create-event-btn') as HTMLButtonElement;
+const createEventButtons = document.querySelectorAll('#create-event-btn, #create-event-admin-btn') as NodeListOf<HTMLButtonElement>;
 const adminTabs = document.querySelectorAll('.admin-tab') as NodeListOf<HTMLButtonElement>;
 
 // Notifications container
@@ -109,6 +122,9 @@ logoutBtn.addEventListener('click', logout);
 
 document.getElementById('explore-events-btn')?.addEventListener('click', () => showSection('events'));
 document.getElementById('become-organizer-btn')?.addEventListener('click', showRegisterModal);
+document.getElementById('browse-events-btn')?.addEventListener('click', () => showSection('events'));
+document.getElementById('view-dashboard-btn')?.addEventListener('click', () => showSection('dashboard'));
+document.getElementById('manage-events-btn')?.addEventListener('click', () => showSection('admin'));
 
 // Modal close handlers
 document.querySelectorAll('.modal-close').forEach(btn => {
@@ -136,7 +152,9 @@ filterTabs.forEach(tab => {
 eventSearch.addEventListener('input', debounce(filterEventsBySearch, 300));
 
 // Admin handlers
-createEventBtn.addEventListener('click', showCreateEventModal);
+createEventButtons.forEach(button => {
+  button.addEventListener('click', showCreateEventModal);
+});
 adminTabs.forEach(tab => {
   tab.addEventListener('click', () => {
     adminTabs.forEach(t => t.classList.remove('active'));
@@ -164,8 +182,17 @@ async function init(): Promise<void> {
   }
 
   // Load initial data
-  await loadStats();
-  await loadEvents();
+  try {
+    await loadStats();
+  } catch (error) {
+    console.error('Failed to load stats:', error);
+  }
+
+  try {
+    await loadEvents();
+  } catch (error) {
+    console.error('Failed to load events:', error);
+  }
 
   // Set up periodic updates
   setInterval(loadStats, 30000); // Update stats every 30 seconds
@@ -173,6 +200,11 @@ async function init(): Promise<void> {
 
 // Socket.IO initialization
 function initializeSocket(): void {
+  if (!(window as any).io) {
+    console.warn('Socket.IO client not available; continuing without real-time updates.');
+    return;
+  }
+
   socket = (window as any).io('http://localhost:5000');
 
   socket.on('connect', () => {
@@ -204,6 +236,15 @@ function initializeSocket(): void {
     loadStats();
   });
 
+  socket.on('volunteer-pending', (data: { event: Event; volunteer: User }) => {
+    if (currentUser?.role === 'admin') {
+      showNotification('info', 'New Join Request', `${data.volunteer.name} requested to join "${data.event.title}"`);
+    }
+    loadEvents();
+    loadStats();
+    if (currentSection === 'admin') loadAdminPanel();
+  });
+
   socket.on('volunteer-cancelled', (data: { event: Event; volunteer: User }) => {
     if (currentUser && data.volunteer._id !== currentUser._id) {
       showNotification('warning', 'Volunteer Withdrew', `${data.volunteer.name} left "${data.event.title}"`);
@@ -215,6 +256,16 @@ function initializeSocket(): void {
 
 // UI Navigation
 function showSection(section: string): void {
+  if (section === 'dashboard' && !currentUser) {
+    showLoginModal();
+    return;
+  }
+
+  if (section === 'admin' && (!currentUser || currentUser.role !== 'admin')) {
+    showNotification('error', 'Access Denied', 'Admin access required');
+    return;
+  }
+
   currentSection = section;
 
   // Hide all sections
@@ -240,19 +291,11 @@ function showSection(section: string): void {
       loadEvents();
       break;
     case 'dashboard':
-      if (!currentUser) {
-        showLoginModal();
-        return;
-      }
       dashboardSection.style.display = 'block';
       dashboardLink.classList.add('active');
       loadDashboard();
       break;
     case 'admin':
-      if (!currentUser || currentUser.role !== 'admin') {
-        showNotification('error', 'Access Denied', 'Admin access required');
-        return;
-      }
       adminSection.style.display = 'block';
       adminLink.classList.add('active');
       loadAdminPanel();
@@ -267,10 +310,70 @@ function showLoginModal(): void {
   loginModal.style.display = 'block';
 }
 
+(window as any).showLoginModal = showLoginModal;
+
 function showRegisterModal(): void {
   hideModals();
   modalOverlay.style.display = 'flex';
   registerModal.style.display = 'block';
+}
+
+function showOrganizerProfileModal(organizer: User & { createdAt?: string }): void {
+  const events = (window as any).currentEvents || [];
+  const organizerEvents = events.filter((event: Event) => event.createdBy._id === organizer._id);
+  const totalVolunteers = organizerEvents.reduce((sum: number, event: Event) => sum + event.volunteers.length, 0);
+
+  const modalTitle = document.getElementById('event-modal-title') as HTMLElement;
+  const modalBody = document.getElementById('event-modal-body') as HTMLElement;
+
+  modalTitle.textContent = `${organizer.name}'s Profile`;
+  modalBody.innerHTML = `
+    <div class="organizer-profile-modal">
+      <div class="profile-header">
+        <div class="profile-avatar">
+          <i class="fas fa-user-tie"></i>
+        </div>
+        <div class="profile-info">
+          <h3>${organizer.name}</h3>
+          <p class="profile-role">Event Organizer</p>
+          <p class="profile-email">${organizer.email || 'Email unavailable'}</p>
+        </div>
+      </div>
+      <div class="profile-stats">
+        <div class="stat-card">
+          <div class="stat-number">${organizerEvents.length}</div>
+          <div class="stat-label">Events Created</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">${totalVolunteers}</div>
+          <div class="stat-label">Volunteers Helped</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">${organizer.createdAt ? new Date(organizer.createdAt).getFullYear() : '2024'}</div>
+          <div class="stat-label">Member Since</div>
+        </div>
+      </div>
+      <div class="organizer-events">
+        <h4>Recent Events by ${organizer.name}</h4>
+        <div class="events-list">
+          ${organizerEvents.slice(0, 5).map((event: Event) => `
+            <div class="event-item-compact">
+              <div class="event-info">
+                <h5>${event.title}</h5>
+                <p>${formatDate(event.date)} - ${event.location}</p>
+                <p>${event.volunteers.length}/${event.requiredVolunteers} volunteers</p>
+              </div>
+              <button class="btn btn-ghost" onclick="viewEvent('${event._id}')">View</button>
+            </div>
+          `).join('')}
+          ${organizerEvents.length === 0 ? '<p>No events created yet.</p>' : ''}
+        </div>
+      </div>
+    </div>
+  `;
+
+  modalOverlay.style.display = 'flex';
+  eventModal.style.display = 'block';
 }
 
 function showEventModal(event: Event): void {
@@ -300,20 +403,30 @@ function showEventModal(event: Event): void {
       </div>
       <div class="event-volunteers-info">
         <h4>Volunteers Needed</h4>
-        <p>${event.volunteers.length} / ${event.requiredVolunteers} volunteers signed up</p>
+        <p>${event.volunteers.length} / ${event.requiredVolunteers} volunteers confirmed</p>
         <div class="volunteers-list">
           ${event.volunteers.length > 0 ?
             event.volunteers.map(v => `<span class="volunteer-tag">${v.name}</span>`).join('') :
             '<span class="no-volunteers">No volunteers yet</span>'
           }
         </div>
+        ${event.pendingVolunteers?.length ? `
+          <h4>Pending Requests</h4>
+          <div class="volunteers-list">
+            ${event.pendingVolunteers.map(v => `<span class="volunteer-tag pending">${v.name}</span>`).join('')}
+          </div>
+        ` : ''}
       </div>
       ${currentUser ? `
         <div class="event-actions-modal">
-          ${event.volunteers.some(v => v._id === currentUser!._id) ?
+          ${currentUser.role === 'admin' ?
+            '<span class="event-full">Admins manage requests from the Admin panel.</span>' :
+            event.volunteers.some(v => v._id === currentUser!._id) ?
             `<button class="btn btn-secondary" onclick="cancelEvent('${event._id}')">Cancel Participation</button>` :
+            event.pendingVolunteers?.some(v => v._id === currentUser!._id) ?
+            `<button class="btn btn-secondary" onclick="cancelEvent('${event._id}')">Cancel Request</button>` :
             event.volunteers.length < event.requiredVolunteers ?
-              `<button class="btn btn-primary" onclick="joinEvent('${event._id}')">Join Event</button>` :
+              `<button class="btn btn-primary" onclick="joinEvent('${event._id}')">Request to Join</button>` :
               '<span class="event-full">Event is full</span>'
           }
         </div>
@@ -481,7 +594,7 @@ async function handleCreateEvent(e: Event): Promise<void> {
 (window as any).joinEvent = async (eventId: string) => {
   try {
     await apiRequest(`/volunteers/events/${eventId}/signup`, 'POST');
-    showNotification('success', 'Joined Event!', 'You have successfully joined the event.');
+    showNotification('success', 'Request Sent', 'Your request is pending admin confirmation.');
     loadEvents();
     if (currentSection === 'dashboard') loadDashboard();
   } catch (error: any) {
@@ -492,11 +605,33 @@ async function handleCreateEvent(e: Event): Promise<void> {
 (window as any).cancelEvent = async (eventId: string) => {
   try {
     await apiRequest(`/volunteers/events/${eventId}/cancel`, 'POST');
-    showNotification('warning', 'Participation Cancelled', 'You have cancelled your participation.');
+    showNotification('warning', 'Cancelled', 'Your participation or pending request was cancelled.');
     loadEvents();
     if (currentSection === 'dashboard') loadDashboard();
   } catch (error: any) {
     showNotification('error', 'Cancellation Failed', error.message || 'Failed to cancel participation');
+  }
+};
+
+(window as any).confirmVolunteer = async (eventId: string, volunteerId: string) => {
+  try {
+    await apiRequest(`/events/${eventId}/confirm/${volunteerId}`, 'POST');
+    showNotification('success', 'Volunteer Confirmed', 'The volunteer has been added to the event.');
+    await loadEvents();
+    if (currentSection === 'admin') loadAdminPanel();
+  } catch (error: any) {
+    showNotification('error', 'Confirm Failed', error.message || 'Failed to confirm volunteer');
+  }
+};
+
+(window as any).rejectVolunteer = async (eventId: string, volunteerId: string) => {
+  try {
+    await apiRequest(`/events/${eventId}/reject/${volunteerId}`, 'POST');
+    showNotification('warning', 'Request Rejected', 'The pending request has been removed.');
+    await loadEvents();
+    if (currentSection === 'admin') loadAdminPanel();
+  } catch (error: any) {
+    showNotification('error', 'Reject Failed', error.message || 'Failed to reject volunteer');
   }
 };
 
@@ -505,6 +640,18 @@ async function handleCreateEvent(e: Event): Promise<void> {
   if (event) {
     showEventModal(event);
   }
+};
+
+(window as any).viewOrganizerProfile = async (organizerId: string) => {
+  const events = (window as any).currentEvents || [];
+  const organizerEvent = events.find((event: Event) => event.createdBy._id === organizerId);
+
+  if (!organizerEvent) {
+    showNotification('error', 'Profile Error', 'Could not find this organizer.');
+    return;
+  }
+
+  showOrganizerProfileModal(organizerEvent.createdBy);
 };
 
 (window as any).editEvent = (eventId: string) => {
@@ -528,12 +675,46 @@ async function handleCreateEvent(e: Event): Promise<void> {
 async function loadStats(): Promise<void> {
   try {
     const events = await apiRequest('/events', 'GET');
-    const uniqueOrgs = new Set(events.map((e: Event) => e.createdBy._id)).size;
-    const totalVolunteers = events.reduce((sum: number, event: Event) => sum + event.volunteers.length, 0);
+    const normalizedEvents = normalizeEvents(events);
+    const uniqueOrgs = new Set(normalizedEvents.map((e: Event) => e.createdBy._id)).size;
+    const totalVolunteers = normalizedEvents.reduce((sum: number, event: Event) => sum + event.volunteers.length, 0);
 
     totalEventsStat.textContent = events.length.toString();
     totalVolunteersStat.textContent = totalVolunteers.toString();
     totalOrganizationsStat.textContent = uniqueOrgs.toString();
+
+    if (currentUser) {
+      if (currentUser.role === 'admin') {
+        const adminEvents = normalizedEvents.filter((event: Event) => event.createdBy._id === currentUser!._id);
+        const adminVolunteersCount = adminEvents.reduce((sum: number, event: Event) => sum + event.volunteers.length, 0);
+        const adminPendingCount = adminEvents.reduce((sum: number, event: Event) => sum + (event.pendingVolunteers?.length || 0), 0);
+
+        const adminEventsCountEl = document.getElementById('admin-events-count');
+        const adminVolunteersCountEl = document.getElementById('admin-volunteers-count');
+        const adminParticipationCountEl = document.getElementById('admin-participation-count');
+
+        if (adminEventsCountEl) adminEventsCountEl.textContent = adminEvents.length.toString();
+        if (adminVolunteersCountEl) adminVolunteersCountEl.textContent = totalVolunteers.toString();
+        if (adminParticipationCountEl) adminParticipationCountEl.textContent = (adminVolunteersCount + adminPendingCount).toString();
+      } else {
+        const userEvents = normalizedEvents.filter((event: Event) =>
+          event.volunteers.some(v => v._id === currentUser!._id)
+        );
+        const availableEvents = normalizedEvents.filter((event: Event) =>
+          !event.volunteers.some(v => v._id === currentUser!._id) &&
+          !event.pendingVolunteers?.some(v => v._id === currentUser!._id) &&
+          event.volunteers.length < event.requiredVolunteers
+        );
+
+        const volunteerEventsCountEl = document.getElementById('volunteer-events-count');
+        const availableEventsCountEl = document.getElementById('available-events-count');
+        const totalOrganizersCountEl = document.getElementById('total-organizers-count');
+
+        if (volunteerEventsCountEl) volunteerEventsCountEl.textContent = userEvents.length.toString();
+        if (availableEventsCountEl) availableEventsCountEl.textContent = availableEvents.length.toString();
+        if (totalOrganizersCountEl) totalOrganizersCountEl.textContent = uniqueOrgs.toString();
+      }
+    }
   } catch (error) {
     console.error('Failed to load stats:', error);
   }
@@ -542,8 +723,9 @@ async function loadStats(): Promise<void> {
 async function loadEvents(): Promise<void> {
   try {
     const events = await apiRequest('/events', 'GET');
-    (window as any).currentEvents = events;
-    renderEvents(events);
+    const normalizedEvents = normalizeEvents(events);
+    (window as any).currentEvents = normalizedEvents;
+    renderEvents(normalizedEvents);
   } catch (error) {
     console.error('Failed to load events:', error);
     eventsGrid.innerHTML = '<p class="error">Failed to load events. Please try again.</p>';
@@ -555,8 +737,10 @@ async function loadDashboard(): Promise<void> {
 
   try {
     const events = await apiRequest('/volunteers/events', 'GET');
-    const myEvents = events.filter((event: Event) =>
-      event.volunteers.some(v => v._id === currentUser!._id)
+    const normalizedEvents = normalizeEvents(events);
+    const myEvents = normalizedEvents.filter((event: Event) =>
+      event.volunteers.some(v => v._id === currentUser!._id) ||
+      event.pendingVolunteers?.some(v => v._id === currentUser!._id)
     );
 
     renderMyEvents(myEvents);
@@ -579,10 +763,12 @@ async function loadAdminPanel(): Promise<void> {
       apiRequest('/events', 'GET'),
       apiRequest('/admin/users', 'GET')
     ]);
+    const normalizedEvents = normalizeEvents(events);
 
-    renderAdminEvents(events);
+    renderAdminEvents(normalizedEvents);
     (window as any).adminUsers = users;
-    (window as any).adminEvents = events;
+    (window as any).adminEvents = normalizedEvents;
+    (window as any).currentEvents = normalizedEvents;
 
   } catch (error) {
     console.error('Failed to load admin data:', error);
@@ -607,17 +793,20 @@ function renderEvents(events: Event[]): void {
 
   events.forEach(event => {
     const isJoined = currentUser && event.volunteers.some(v => v._id === currentUser!._id);
+    const isPending = currentUser && event.pendingVolunteers?.some(v => v._id === currentUser!._id);
     const isFull = event.volunteers.length >= event.requiredVolunteers;
-    const canManage = currentUser && (currentUser.role === 'admin' || event.createdBy._id === currentUser._id);
+    const canManage = currentUser && currentUser.role === 'admin';
 
     const eventCard = document.createElement('div');
     eventCard.className = 'event-card';
     eventCard.innerHTML = `
       <div class="event-header">
         <h3 class="event-title">${event.title}</h3>
-        <div class="event-organizer">
+        <div class="event-organizer-badge">
           <i class="fas fa-user-tie"></i>
-          <span>${event.createdBy.name}</span>
+          <span class="organizer-label">Organized by</span>
+          <span class="organizer-name" onclick="viewOrganizerProfile('${event.createdBy._id}')" style="cursor: pointer;">${event.createdBy.name}</span>
+          <span class="organizer-role">Admin</span>
         </div>
       </div>
       <div class="event-body">
@@ -639,21 +828,26 @@ function renderEvents(events: Event[]): void {
         <div class="event-volunteers">
           <i class="fas fa-users"></i>
           <span class="volunteers-count">${event.volunteers.length}/${event.requiredVolunteers}</span>
+          ${event.pendingVolunteers?.length ? `<span class="pending-count">${event.pendingVolunteers.length} pending</span>` : ''}
         </div>
       </div>
       <div class="event-footer">
-        <div class="event-status ${isJoined ? 'joined' : isFull ? 'full' : 'available'}">
-          ${isJoined ? 'Joined' : isFull ? 'Full' : 'Available'}
+        <div class="event-status ${isJoined ? 'joined' : isPending ? 'pending' : isFull ? 'full' : 'available'}">
+          ${isJoined ? 'Joined' : isPending ? 'Pending' : isFull ? 'Full' : 'Available'}
         </div>
         <div class="event-actions">
           <button class="btn btn-ghost" onclick="viewEvent('${event._id}')">
             <i class="fas fa-eye"></i>
           </button>
           ${currentUser ? (
+            currentUser.role === 'admin' ?
+              '' :
             isJoined ?
               `<button class="btn btn-secondary" onclick="cancelEvent('${event._id}')">Cancel</button>` :
+            isPending ?
+              `<button class="btn btn-secondary" onclick="cancelEvent('${event._id}')">Cancel Request</button>` :
               !isFull ?
-                `<button class="btn btn-primary" onclick="joinEvent('${event._id}')">Join</button>` :
+                `<button class="btn btn-primary" onclick="joinEvent('${event._id}')">Request</button>` :
                 ''
           ) : `<button class="btn btn-primary" onclick="showLoginModal()">Login to Join</button>`}
           ${canManage ? `
@@ -687,16 +881,18 @@ function renderMyEvents(events: Event[]): void {
   }
 
   events.forEach(event => {
+    const isPending = event.pendingVolunteers?.some(v => v._id === currentUser!._id);
     const eventItem = document.createElement('div');
     eventItem.className = 'event-item';
     eventItem.innerHTML = `
       <div class="event-info">
         <h4>${event.title}</h4>
-        <p>${formatDate(event.date)} • ${event.location}</p>
+        <p>${formatDate(event.date)} - ${event.location}</p>
+        <span class="event-status inline ${isPending ? 'pending' : 'joined'}">${isPending ? 'Pending approval' : 'Confirmed'}</span>
       </div>
       <div class="event-actions">
         <button class="btn btn-ghost" onclick="viewEvent('${event._id}')">View</button>
-        <button class="btn btn-secondary" onclick="cancelEvent('${event._id}')">Cancel</button>
+        <button class="btn btn-secondary" onclick="cancelEvent('${event._id}')">${isPending ? 'Cancel Request' : 'Cancel'}</button>
       </div>
     `;
     myEventsList.appendChild(eventItem);
@@ -704,7 +900,29 @@ function renderMyEvents(events: Event[]): void {
 }
 
 function renderAdminEvents(events: Event[]): void {
+  const pendingTotal = events.reduce((sum, event) => sum + (event.pendingVolunteers?.length || 0), 0);
+  const confirmedTotal = events.reduce((sum, event) => sum + event.volunteers.length, 0);
+  const openSlots = events.reduce((sum, event) => sum + Math.max(event.requiredVolunteers - event.volunteers.length, 0), 0);
+
   adminContent.innerHTML = `
+    <div class="admin-summary-grid">
+      <div class="admin-summary-card">
+        <span class="summary-label">Events</span>
+        <strong>${events.length}</strong>
+      </div>
+      <div class="admin-summary-card">
+        <span class="summary-label">Confirmed</span>
+        <strong>${confirmedTotal}</strong>
+      </div>
+      <div class="admin-summary-card warning">
+        <span class="summary-label">Pending</span>
+        <strong>${pendingTotal}</strong>
+      </div>
+      <div class="admin-summary-card">
+        <span class="summary-label">Open Slots</span>
+        <strong>${openSlots}</strong>
+      </div>
+    </div>
     <div class="admin-events-table">
       <table>
         <thead>
@@ -713,6 +931,7 @@ function renderAdminEvents(events: Event[]): void {
             <th>Date</th>
             <th>Location</th>
             <th>Volunteers</th>
+            <th>Pending</th>
             <th>Organizer</th>
             <th>Actions</th>
           </tr>
@@ -720,21 +939,51 @@ function renderAdminEvents(events: Event[]): void {
         <tbody>
           ${events.map(event => `
             <tr>
-              <td>${event.title}</td>
-              <td>${formatDate(event.date)}</td>
-              <td>${event.location}</td>
-              <td>${event.volunteers.length}/${event.requiredVolunteers}</td>
-              <td>${event.createdBy.name}</td>
               <td>
-                <button class="btn btn-ghost" onclick="viewEvent('${event._id}')">
+                <div class="admin-event-title">
+                  <strong>${event.title}</strong>
+                  <span>${event.description || 'No description'}</span>
+                </div>
+              </td>
+              <td>
+                <div class="admin-meta-cell">
+                  <i class="fas fa-calendar"></i>
+                  <span>${formatDate(event.date)}</span>
+                </div>
+              </td>
+              <td>
+                <div class="admin-meta-cell">
+                  <i class="fas fa-map-marker-alt"></i>
+                  <span>${event.location}</span>
+                </div>
+              </td>
+              <td><span class="volunteer-pill">${event.volunteers.length}/${event.requiredVolunteers}</span></td>
+              <td>
+                ${event.pendingVolunteers?.length ? `
+                  <div class="pending-requests">
+                    ${event.pendingVolunteers.map(volunteer => `
+                      <div class="pending-request">
+                        <span>${volunteer.name}</span>
+                        <button class="btn btn-primary btn-mini" onclick="confirmVolunteer('${event._id}', '${volunteer._id}')">Confirm</button>
+                        <button class="btn btn-secondary btn-mini" onclick="rejectVolunteer('${event._id}', '${volunteer._id}')">Reject</button>
+                      </div>
+                    `).join('')}
+                  </div>
+                ` : '<span class="muted-text">None</span>'}
+              </td>
+              <td><span class="organizer-chip">${event.createdBy.name}</span></td>
+              <td>
+                <div class="admin-row-actions">
+                  <button class="btn btn-ghost" onclick="viewEvent('${event._id}')" title="View event">
                   <i class="fas fa-eye"></i>
-                </button>
-                <button class="btn btn-ghost" onclick="editEvent('${event._id}')">
+                  </button>
+                  <button class="btn btn-ghost" onclick="editEvent('${event._id}')" title="Edit event">
                   <i class="fas fa-edit"></i>
-                </button>
-                <button class="btn btn-ghost" onclick="deleteEvent('${event._id}')">
+                  </button>
+                  <button class="btn btn-ghost danger" onclick="deleteEvent('${event._id}')" title="Delete event">
                   <i class="fas fa-trash"></i>
-                </button>
+                  </button>
+                </div>
               </td>
             </tr>
           `).join('')}
@@ -758,7 +1007,8 @@ function filterEvents(filter: string = 'all'): void {
     case 'my-events':
       if (currentUser) {
         filteredEvents = events.filter((event: Event) =>
-          event.volunteers.some(v => v._id === currentUser!._id)
+          event.volunteers.some(v => v._id === currentUser!._id) ||
+          event.pendingVolunteers?.some(v => v._id === currentUser!._id)
         );
       } else {
         showLoginModal();
@@ -892,6 +1142,12 @@ function renderAdminStats(): void {
 
 // Utility functions
 function updateUI(): void {
+  const guestHero = document.getElementById('guest-hero') as HTMLElement;
+  const volunteerHero = document.getElementById('volunteer-hero') as HTMLElement;
+  const adminHero = document.getElementById('admin-hero') as HTMLElement;
+  const volunteerNameDisplay = document.getElementById('volunteer-name-display') as HTMLElement;
+  const adminNameDisplay = document.getElementById('admin-name-display') as HTMLElement;
+
   if (currentUser) {
     loginBtn.style.display = 'none';
     registerBtn.style.display = 'none';
@@ -902,6 +1158,12 @@ function updateUI(): void {
     if (currentUser.role === 'admin') {
       adminLink.style.display = 'flex';
     }
+
+    guestHero.style.display = 'none';
+    volunteerHero.style.display = currentUser.role === 'admin' ? 'none' : 'block';
+    adminHero.style.display = currentUser.role === 'admin' ? 'block' : 'none';
+    volunteerNameDisplay.textContent = currentUser.name;
+    adminNameDisplay.textContent = currentUser.name;
   } else {
     loginBtn.style.display = 'inline-flex';
     registerBtn.style.display = 'inline-flex';
@@ -909,8 +1171,41 @@ function updateUI(): void {
 
     dashboardLink.style.display = 'none';
     adminLink.style.display = 'none';
+
+    guestHero.style.display = 'block';
+    volunteerHero.style.display = 'none';
+    adminHero.style.display = 'none';
   }
 }
+
+(window as any).editUser = async (userId: string) => {
+  const users = (window as any).adminUsers || [];
+  const user = users.find((item: any) => item._id === userId);
+  if (!user) return;
+
+  const role = prompt('Enter role for this user: volunteer or admin', user.role);
+  if (!role || !['volunteer', 'admin'].includes(role)) return;
+
+  try {
+    await apiRequest(`/admin/users/${userId}`, 'PUT', { role });
+    showNotification('success', 'User Updated', 'The user role has been updated.');
+    loadAdminPanel();
+  } catch (error: any) {
+    showNotification('error', 'Update Failed', error.message || 'Failed to update user');
+  }
+};
+
+(window as any).deleteUser = async (userId: string) => {
+  if (!confirm('Are you sure you want to delete this user?')) return;
+
+  try {
+    await apiRequest(`/admin/users/${userId}`, 'DELETE');
+    showNotification('success', 'User Deleted', 'The user has been removed.');
+    loadAdminPanel();
+  } catch (error: any) {
+    showNotification('error', 'Delete Failed', error.message || 'Failed to delete user');
+  }
+};
 
 function showNotification(type: 'success' | 'error' | 'warning' | 'info', title: string, message: string): void {
   const notification = document.createElement('div');

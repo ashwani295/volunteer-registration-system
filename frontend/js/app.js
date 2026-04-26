@@ -1,11 +1,21 @@
 "use strict";
 // Modern VolunteerHub Application with Real-time Features
-var _a, _b, _c, _d, _e, _f;
+var _a, _b, _c, _d, _e;
 // Global variables
 let currentUser = null;
 let token = null;
 let socket = null;
 let currentSection = 'hero';
+function normalizeEvent(event) {
+    return {
+        ...event,
+        volunteers: (event.volunteers || []).filter(Boolean),
+        pendingVolunteers: (event.pendingVolunteers || []).filter(Boolean)
+    };
+}
+function normalizeEvents(events) {
+    return events.map(normalizeEvent);
+}
 // DOM elements
 const heroSection = document.getElementById('hero-section');
 const eventsSection = document.getElementById('events-section');
@@ -44,7 +54,7 @@ const totalEventsStat = document.getElementById('total-events');
 const totalVolunteersStat = document.getElementById('total-volunteers');
 const totalOrganizationsStat = document.getElementById('total-organizations');
 // Admin elements
-const createEventBtn = document.getElementById('create-event-btn');
+const createEventButtons = document.querySelectorAll('#create-event-btn, #create-event-admin-btn');
 const adminTabs = document.querySelectorAll('.admin-tab');
 // Notifications container
 const notificationsContainer = document.getElementById('notifications');
@@ -64,8 +74,7 @@ logoutBtn.addEventListener('click', logout);
 (_b = document.getElementById('become-organizer-btn')) === null || _b === void 0 ? void 0 : _b.addEventListener('click', showRegisterModal);
 (_c = document.getElementById('browse-events-btn')) === null || _c === void 0 ? void 0 : _c.addEventListener('click', () => showSection('events'));
 (_d = document.getElementById('view-dashboard-btn')) === null || _d === void 0 ? void 0 : _d.addEventListener('click', () => showSection('dashboard'));
-(_e = document.getElementById('create-event-btn')) === null || _e === void 0 ? void 0 : _e.addEventListener('click', showCreateEventModal);
-(_f = document.getElementById('manage-events-btn')) === null || _f === void 0 ? void 0 : _f.addEventListener('click', () => showSection('admin'));
+(_e = document.getElementById('manage-events-btn')) === null || _e === void 0 ? void 0 : _e.addEventListener('click', () => showSection('admin'));
 // Modal close handlers
 document.querySelectorAll('.modal-close').forEach(btn => {
     btn.addEventListener('click', hideModals);
@@ -88,7 +97,9 @@ filterTabs.forEach(tab => {
 });
 eventSearch.addEventListener('input', debounce(filterEventsBySearch, 300));
 // Admin handlers
-createEventBtn.addEventListener('click', showCreateEventModal);
+createEventButtons.forEach(button => {
+    button.addEventListener('click', showCreateEventModal);
+});
 adminTabs.forEach(tab => {
     tab.addEventListener('click', () => {
         adminTabs.forEach(t => t.classList.remove('active'));
@@ -115,12 +126,14 @@ async function init() {
     // Load initial data
     try {
         await loadStats();
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Failed to load stats:', error);
     }
     try {
         await loadEvents();
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Failed to load events:', error);
     }
     // Set up periodic updates
@@ -128,6 +141,10 @@ async function init() {
 }
 // Socket.IO initialization
 function initializeSocket() {
+    if (!window.io) {
+        console.warn('Socket.IO client not available; continuing without real-time updates.');
+        return;
+    }
     socket = window.io('http://localhost:5000');
     socket.on('connect', () => {
         console.log('Connected to server');
@@ -153,6 +170,15 @@ function initializeSocket() {
         loadEvents();
         loadStats();
     });
+    socket.on('volunteer-pending', (data) => {
+        if ((currentUser === null || currentUser === void 0 ? void 0 : currentUser.role) === 'admin') {
+            showNotification('info', 'New Join Request', `${data.volunteer.name} requested to join "${data.event.title}"`);
+        }
+        loadEvents();
+        loadStats();
+        if (currentSection === 'admin')
+            loadAdminPanel();
+    });
     socket.on('volunteer-cancelled', (data) => {
         if (currentUser && data.volunteer._id !== currentUser._id) {
             showNotification('warning', 'Volunteer Withdrew', `${data.volunteer.name} left "${data.event.title}"`);
@@ -163,6 +189,14 @@ function initializeSocket() {
 }
 // UI Navigation
 function showSection(section) {
+    if (section === 'dashboard' && !currentUser) {
+        showLoginModal();
+        return;
+    }
+    if (section === 'admin' && (!currentUser || currentUser.role !== 'admin')) {
+        showNotification('error', 'Access Denied', 'Admin access required');
+        return;
+    }
     currentSection = section;
     // Hide all sections
     heroSection.style.display = 'none';
@@ -185,19 +219,11 @@ function showSection(section) {
             loadEvents();
             break;
         case 'dashboard':
-            if (!currentUser) {
-                showLoginModal();
-                return;
-            }
             dashboardSection.style.display = 'block';
             dashboardLink.classList.add('active');
             loadDashboard();
             break;
         case 'admin':
-            if (!currentUser || currentUser.role !== 'admin') {
-                showNotification('error', 'Access Denied', 'Admin access required');
-                return;
-            }
             adminSection.style.display = 'block';
             adminLink.classList.add('active');
             loadAdminPanel();
@@ -210,6 +236,7 @@ function showLoginModal() {
     modalOverlay.style.display = 'flex';
     loginModal.style.display = 'block';
 }
+window.showLoginModal = showLoginModal;
 function showRegisterModal() {
     hideModals();
     modalOverlay.style.display = 'flex';
@@ -217,12 +244,10 @@ function showRegisterModal() {
 }
 function showOrganizerProfileModal(organizer) {
     const events = window.currentEvents || [];
-    const organizerEvents = events.filter(e => e.createdBy._id === organizer._id);
+    const organizerEvents = events.filter((event) => event.createdBy._id === organizer._id);
     const totalVolunteers = organizerEvents.reduce((sum, event) => sum + event.volunteers.length, 0);
-
-    const modalBody = document.getElementById('event-modal-body');
     const modalTitle = document.getElementById('event-modal-title');
-
+    const modalBody = document.getElementById('event-modal-body');
     modalTitle.textContent = `${organizer.name}'s Profile`;
     modalBody.innerHTML = `
     <div class="organizer-profile-modal">
@@ -233,7 +258,7 @@ function showOrganizerProfileModal(organizer) {
         <div class="profile-info">
           <h3>${organizer.name}</h3>
           <p class="profile-role">Event Organizer</p>
-          <p class="profile-email">${organizer.email}</p>
+          <p class="profile-email">${organizer.email || 'Email unavailable'}</p>
         </div>
       </div>
       <div class="profile-stats">
@@ -253,11 +278,11 @@ function showOrganizerProfileModal(organizer) {
       <div class="organizer-events">
         <h4>Recent Events by ${organizer.name}</h4>
         <div class="events-list">
-          ${organizerEvents.slice(0, 5).map(event => `
+          ${organizerEvents.slice(0, 5).map((event) => `
             <div class="event-item-compact">
               <div class="event-info">
                 <h5>${event.title}</h5>
-                <p>${formatDate(event.date)} • ${event.location}</p>
+                <p>${formatDate(event.date)} - ${event.location}</p>
                 <p>${event.volunteers.length}/${event.requiredVolunteers} volunteers</p>
               </div>
               <button class="btn btn-ghost" onclick="viewEvent('${event._id}')">View</button>
@@ -268,7 +293,64 @@ function showOrganizerProfileModal(organizer) {
       </div>
     </div>
   `;
-
+    modalOverlay.style.display = 'flex';
+    eventModal.style.display = 'block';
+}
+function showEventModal(event) {
+    var _a, _b;
+    const modalTitle = document.getElementById('event-modal-title');
+    const modalBody = document.getElementById('event-modal-body');
+    modalTitle.textContent = event.title;
+    modalBody.innerHTML = `
+    <div class="event-details-modal">
+      <div class="event-meta">
+        <div class="event-organizer-info">
+          <i class="fas fa-user-tie"></i>
+          <span>Organized by ${event.createdBy.name}</span>
+        </div>
+        <div class="event-date-time">
+          <i class="fas fa-calendar"></i>
+          <span>${formatDate(event.date)} at ${event.startTime} - ${event.endTime}</span>
+        </div>
+        <div class="event-location">
+          <i class="fas fa-map-marker-alt"></i>
+          <span>${event.location}</span>
+        </div>
+      </div>
+      <div class="event-description-full">
+        <h4>Description</h4>
+        <p>${event.description || 'No description provided.'}</p>
+      </div>
+      <div class="event-volunteers-info">
+        <h4>Volunteers Needed</h4>
+        <p>${event.volunteers.length} / ${event.requiredVolunteers} volunteers confirmed</p>
+        <div class="volunteers-list">
+          ${event.volunteers.length > 0 ?
+        event.volunteers.map(v => `<span class="volunteer-tag">${v.name}</span>`).join('') :
+        '<span class="no-volunteers">No volunteers yet</span>'}
+        </div>
+        ${((_a = event.pendingVolunteers) === null || _a === void 0 ? void 0 : _a.length) ? `
+          <h4>Pending Requests</h4>
+          <div class="volunteers-list">
+            ${event.pendingVolunteers.map(v => `<span class="volunteer-tag pending">${v.name}</span>`).join('')}
+          </div>
+        ` : ''}
+      </div>
+      ${currentUser ? `
+        <div class="event-actions-modal">
+          ${currentUser.role === 'admin' ?
+        '<span class="event-full">Admins manage requests from the Admin panel.</span>' :
+        event.volunteers.some(v => v._id === currentUser._id) ?
+            `<button class="btn btn-secondary" onclick="cancelEvent('${event._id}')">Cancel Participation</button>` :
+            ((_b = event.pendingVolunteers) === null || _b === void 0 ? void 0 : _b.some(v => v._id === currentUser._id)) ?
+                `<button class="btn btn-secondary" onclick="cancelEvent('${event._id}')">Cancel Request</button>` :
+                event.volunteers.length < event.requiredVolunteers ?
+                    `<button class="btn btn-primary" onclick="joinEvent('${event._id}')">Request to Join</button>` :
+                    '<span class="event-full">Event is full</span>'}
+        </div>
+      ` : ''}
+    </div>
+  `;
     modalOverlay.style.display = 'flex';
     eventModal.style.display = 'block';
 }
@@ -405,7 +487,7 @@ async function handleCreateEvent(e) {
 window.joinEvent = async (eventId) => {
     try {
         await apiRequest(`/volunteers/events/${eventId}/signup`, 'POST');
-        showNotification('success', 'Joined Event!', 'You have successfully joined the event.');
+        showNotification('success', 'Request Sent', 'Your request is pending admin confirmation.');
         loadEvents();
         if (currentSection === 'dashboard')
             loadDashboard();
@@ -417,13 +499,37 @@ window.joinEvent = async (eventId) => {
 window.cancelEvent = async (eventId) => {
     try {
         await apiRequest(`/volunteers/events/${eventId}/cancel`, 'POST');
-        showNotification('warning', 'Participation Cancelled', 'You have cancelled your participation.');
+        showNotification('warning', 'Cancelled', 'Your participation or pending request was cancelled.');
         loadEvents();
         if (currentSection === 'dashboard')
             loadDashboard();
     }
     catch (error) {
         showNotification('error', 'Cancellation Failed', error.message || 'Failed to cancel participation');
+    }
+};
+window.confirmVolunteer = async (eventId, volunteerId) => {
+    try {
+        await apiRequest(`/events/${eventId}/confirm/${volunteerId}`, 'POST');
+        showNotification('success', 'Volunteer Confirmed', 'The volunteer has been added to the event.');
+        await loadEvents();
+        if (currentSection === 'admin')
+            loadAdminPanel();
+    }
+    catch (error) {
+        showNotification('error', 'Confirm Failed', error.message || 'Failed to confirm volunteer');
+    }
+};
+window.rejectVolunteer = async (eventId, volunteerId) => {
+    try {
+        await apiRequest(`/events/${eventId}/reject/${volunteerId}`, 'POST');
+        showNotification('warning', 'Request Rejected', 'The pending request has been removed.');
+        await loadEvents();
+        if (currentSection === 'admin')
+            loadAdminPanel();
+    }
+    catch (error) {
+        showNotification('error', 'Reject Failed', error.message || 'Failed to reject volunteer');
     }
 };
 window.viewEvent = (eventId) => {
@@ -434,15 +540,13 @@ window.viewEvent = (eventId) => {
     }
 };
 window.viewOrganizerProfile = async (organizerId) => {
-    try {
-        const users = await apiRequest('/admin/users', 'GET');
-        const organizer = users.find(u => u._id === organizerId);
-        if (organizer) {
-            showOrganizerProfileModal(organizer);
-        }
-    } catch (error) {
-        showNotification('error', 'Profile Error', 'Could not load organizer profile');
+    const events = window.currentEvents || [];
+    const organizerEvent = events.find((event) => event.createdBy._id === organizerId);
+    if (!organizerEvent) {
+        showNotification('error', 'Profile Error', 'Could not find this organizer.');
+        return;
     }
+    showOrganizerProfileModal(organizerEvent.createdBy);
 };
 window.editEvent = (eventId) => {
     // TODO: Implement edit event functionality
@@ -464,40 +568,44 @@ window.deleteEvent = async (eventId) => {
 async function loadStats() {
     try {
         const events = await apiRequest('/events', 'GET');
-        const uniqueOrgs = new Set(events.map((e) => e.createdBy._id)).size;
-        const totalVolunteers = events.reduce((sum, event) => sum + event.volunteers.length, 0);
-
-        // Update global stats
+        const normalizedEvents = normalizeEvents(events);
+        const uniqueOrgs = new Set(normalizedEvents.map((e) => e.createdBy._id)).size;
+        const totalVolunteers = normalizedEvents.reduce((sum, event) => sum + event.volunteers.length, 0);
         totalEventsStat.textContent = events.length.toString();
         totalVolunteersStat.textContent = totalVolunteers.toString();
         totalOrganizationsStat.textContent = uniqueOrgs.toString();
-
-        // Update user-specific stats
         if (currentUser) {
             if (currentUser.role === 'admin') {
-                // Admin stats
-                const adminEvents = events.filter(e => e.createdBy._id === currentUser._id);
+                const adminEvents = normalizedEvents.filter((event) => event.createdBy._id === currentUser._id);
                 const adminVolunteersCount = adminEvents.reduce((sum, event) => sum + event.volunteers.length, 0);
-
+                const adminPendingCount = adminEvents.reduce((sum, event) => { var _a; return sum + (((_a = event.pendingVolunteers) === null || _a === void 0 ? void 0 : _a.length) || 0); }, 0);
                 const adminEventsCountEl = document.getElementById('admin-events-count');
                 const adminVolunteersCountEl = document.getElementById('admin-volunteers-count');
                 const adminParticipationCountEl = document.getElementById('admin-participation-count');
-
-                if (adminEventsCountEl) adminEventsCountEl.textContent = adminEvents.length.toString();
-                if (adminVolunteersCountEl) adminVolunteersCountEl.textContent = totalVolunteers.toString();
-                if (adminParticipationCountEl) adminParticipationCountEl.textContent = adminVolunteersCount.toString();
-            } else {
-                // Volunteer stats
-                const userEvents = events.filter(event => event.volunteers.some(v => v._id === currentUser._id));
-                const availableEvents = events.filter(event => !event.volunteers.some(v => v._id === currentUser._id) && event.volunteers.length < event.requiredVolunteers);
-
+                if (adminEventsCountEl)
+                    adminEventsCountEl.textContent = adminEvents.length.toString();
+                if (adminVolunteersCountEl)
+                    adminVolunteersCountEl.textContent = totalVolunteers.toString();
+                if (adminParticipationCountEl)
+                    adminParticipationCountEl.textContent = (adminVolunteersCount + adminPendingCount).toString();
+            }
+            else {
+                const userEvents = normalizedEvents.filter((event) => event.volunteers.some(v => v._id === currentUser._id));
+                const availableEvents = normalizedEvents.filter((event) => {
+                    var _a;
+                    return !event.volunteers.some(v => v._id === currentUser._id) &&
+                        !((_a = event.pendingVolunteers) === null || _a === void 0 ? void 0 : _a.some(v => v._id === currentUser._id)) &&
+                        event.volunteers.length < event.requiredVolunteers;
+                });
                 const volunteerEventsCountEl = document.getElementById('volunteer-events-count');
                 const availableEventsCountEl = document.getElementById('available-events-count');
                 const totalOrganizersCountEl = document.getElementById('total-organizers-count');
-
-                if (volunteerEventsCountEl) volunteerEventsCountEl.textContent = userEvents.length.toString();
-                if (availableEventsCountEl) availableEventsCountEl.textContent = availableEvents.length.toString();
-                if (totalOrganizersCountEl) totalOrganizersCountEl.textContent = uniqueOrgs.toString();
+                if (volunteerEventsCountEl)
+                    volunteerEventsCountEl.textContent = userEvents.length.toString();
+                if (availableEventsCountEl)
+                    availableEventsCountEl.textContent = availableEvents.length.toString();
+                if (totalOrganizersCountEl)
+                    totalOrganizersCountEl.textContent = uniqueOrgs.toString();
             }
         }
     }
@@ -508,8 +616,9 @@ async function loadStats() {
 async function loadEvents() {
     try {
         const events = await apiRequest('/events', 'GET');
-        window.currentEvents = events;
-        renderEvents(events);
+        const normalizedEvents = normalizeEvents(events);
+        window.currentEvents = normalizedEvents;
+        renderEvents(normalizedEvents);
     }
     catch (error) {
         console.error('Failed to load events:', error);
@@ -521,7 +630,12 @@ async function loadDashboard() {
         return;
     try {
         const events = await apiRequest('/volunteers/events', 'GET');
-        const myEvents = events.filter((event) => event.volunteers.some(v => v._id === currentUser._id));
+        const normalizedEvents = normalizeEvents(events);
+        const myEvents = normalizedEvents.filter((event) => {
+            var _a;
+            return event.volunteers.some(v => v._id === currentUser._id) ||
+                ((_a = event.pendingVolunteers) === null || _a === void 0 ? void 0 : _a.some(v => v._id === currentUser._id));
+        });
         renderMyEvents(myEvents);
         // Update stats
         document.getElementById('events-participated').textContent = myEvents.length.toString();
@@ -540,9 +654,11 @@ async function loadAdminPanel() {
             apiRequest('/events', 'GET'),
             apiRequest('/admin/users', 'GET')
         ]);
-        renderAdminEvents(events);
+        const normalizedEvents = normalizeEvents(events);
+        renderAdminEvents(normalizedEvents);
         window.adminUsers = users;
-        window.adminEvents = events;
+        window.adminEvents = normalizedEvents;
+        window.currentEvents = normalizedEvents;
     }
     catch (error) {
         console.error('Failed to load admin data:', error);
@@ -563,9 +679,11 @@ function renderEvents(events) {
         return;
     }
     events.forEach(event => {
+        var _a, _b;
         const isJoined = currentUser && event.volunteers.some(v => v._id === currentUser._id);
+        const isPending = currentUser && ((_a = event.pendingVolunteers) === null || _a === void 0 ? void 0 : _a.some(v => v._id === currentUser._id));
         const isFull = event.volunteers.length >= event.requiredVolunteers;
-        const canManage = currentUser && (currentUser.role === 'admin' || event.createdBy._id === currentUser._id);
+        const canManage = currentUser && currentUser.role === 'admin';
         const eventCard = document.createElement('div');
         eventCard.className = 'event-card';
         eventCard.innerHTML = `
@@ -597,21 +715,26 @@ function renderEvents(events) {
         <div class="event-volunteers">
           <i class="fas fa-users"></i>
           <span class="volunteers-count">${event.volunteers.length}/${event.requiredVolunteers}</span>
+          ${((_b = event.pendingVolunteers) === null || _b === void 0 ? void 0 : _b.length) ? `<span class="pending-count">${event.pendingVolunteers.length} pending</span>` : ''}
         </div>
       </div>
       <div class="event-footer">
-        <div class="event-status ${isJoined ? 'joined' : isFull ? 'full' : 'available'}">
-          ${isJoined ? 'Joined' : isFull ? 'Full' : 'Available'}
+        <div class="event-status ${isJoined ? 'joined' : isPending ? 'pending' : isFull ? 'full' : 'available'}">
+          ${isJoined ? 'Joined' : isPending ? 'Pending' : isFull ? 'Full' : 'Available'}
         </div>
         <div class="event-actions">
           <button class="btn btn-ghost" onclick="viewEvent('${event._id}')">
             <i class="fas fa-eye"></i>
           </button>
-          ${currentUser ? (isJoined ?
-            `<button class="btn btn-secondary" onclick="cancelEvent('${event._id}')">Cancel</button>` :
-            !isFull ?
-                `<button class="btn btn-primary" onclick="joinEvent('${event._id}')">Join</button>` :
-                '') : `<button class="btn btn-primary" onclick="showLoginModal()">Login to Join</button>`}
+          ${currentUser ? (currentUser.role === 'admin' ?
+            '' :
+            isJoined ?
+                `<button class="btn btn-secondary" onclick="cancelEvent('${event._id}')">Cancel</button>` :
+                isPending ?
+                    `<button class="btn btn-secondary" onclick="cancelEvent('${event._id}')">Cancel Request</button>` :
+                    !isFull ?
+                        `<button class="btn btn-primary" onclick="joinEvent('${event._id}')">Request</button>` :
+                        '') : `<button class="btn btn-primary" onclick="showLoginModal()">Login to Join</button>`}
           ${canManage ? `
             <button class="btn btn-ghost" onclick="editEvent('${event._id}')">
               <i class="fas fa-edit"></i>
@@ -639,23 +762,47 @@ function renderMyEvents(events) {
         return;
     }
     events.forEach(event => {
+        var _a;
+        const isPending = (_a = event.pendingVolunteers) === null || _a === void 0 ? void 0 : _a.some(v => v._id === currentUser._id);
         const eventItem = document.createElement('div');
         eventItem.className = 'event-item';
         eventItem.innerHTML = `
       <div class="event-info">
         <h4>${event.title}</h4>
-        <p>${formatDate(event.date)} • ${event.location}</p>
+        <p>${formatDate(event.date)} - ${event.location}</p>
+        <span class="event-status inline ${isPending ? 'pending' : 'joined'}">${isPending ? 'Pending approval' : 'Confirmed'}</span>
       </div>
       <div class="event-actions">
         <button class="btn btn-ghost" onclick="viewEvent('${event._id}')">View</button>
-        <button class="btn btn-secondary" onclick="cancelEvent('${event._id}')">Cancel</button>
+        <button class="btn btn-secondary" onclick="cancelEvent('${event._id}')">${isPending ? 'Cancel Request' : 'Cancel'}</button>
       </div>
     `;
         myEventsList.appendChild(eventItem);
     });
 }
 function renderAdminEvents(events) {
+    const pendingTotal = events.reduce((sum, event) => { var _a; return sum + (((_a = event.pendingVolunteers) === null || _a === void 0 ? void 0 : _a.length) || 0); }, 0);
+    const confirmedTotal = events.reduce((sum, event) => sum + event.volunteers.length, 0);
+    const openSlots = events.reduce((sum, event) => sum + Math.max(event.requiredVolunteers - event.volunteers.length, 0), 0);
     adminContent.innerHTML = `
+    <div class="admin-summary-grid">
+      <div class="admin-summary-card">
+        <span class="summary-label">Events</span>
+        <strong>${events.length}</strong>
+      </div>
+      <div class="admin-summary-card">
+        <span class="summary-label">Confirmed</span>
+        <strong>${confirmedTotal}</strong>
+      </div>
+      <div class="admin-summary-card warning">
+        <span class="summary-label">Pending</span>
+        <strong>${pendingTotal}</strong>
+      </div>
+      <div class="admin-summary-card">
+        <span class="summary-label">Open Slots</span>
+        <strong>${openSlots}</strong>
+      </div>
+    </div>
     <div class="admin-events-table">
       <table>
         <thead>
@@ -664,31 +811,65 @@ function renderAdminEvents(events) {
             <th>Date</th>
             <th>Location</th>
             <th>Volunteers</th>
+            <th>Pending</th>
             <th>Organizer</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody>
-          ${events.map(event => `
+          ${events.map(event => {
+        var _a;
+        return `
             <tr>
-              <td>${event.title}</td>
-              <td>${formatDate(event.date)}</td>
-              <td>${event.location}</td>
-              <td>${event.volunteers.length}/${event.requiredVolunteers}</td>
-              <td>${event.createdBy.name}</td>
               <td>
-                <button class="btn btn-ghost" onclick="viewEvent('${event._id}')">
+                <div class="admin-event-title">
+                  <strong>${event.title}</strong>
+                  <span>${event.description || 'No description'}</span>
+                </div>
+              </td>
+              <td>
+                <div class="admin-meta-cell">
+                  <i class="fas fa-calendar"></i>
+                  <span>${formatDate(event.date)}</span>
+                </div>
+              </td>
+              <td>
+                <div class="admin-meta-cell">
+                  <i class="fas fa-map-marker-alt"></i>
+                  <span>${event.location}</span>
+                </div>
+              </td>
+              <td><span class="volunteer-pill">${event.volunteers.length}/${event.requiredVolunteers}</span></td>
+              <td>
+                ${((_a = event.pendingVolunteers) === null || _a === void 0 ? void 0 : _a.length) ? `
+                  <div class="pending-requests">
+                    ${event.pendingVolunteers.map(volunteer => `
+                      <div class="pending-request">
+                        <span>${volunteer.name}</span>
+                        <button class="btn btn-primary btn-mini" onclick="confirmVolunteer('${event._id}', '${volunteer._id}')">Confirm</button>
+                        <button class="btn btn-secondary btn-mini" onclick="rejectVolunteer('${event._id}', '${volunteer._id}')">Reject</button>
+                      </div>
+                    `).join('')}
+                  </div>
+                ` : '<span class="muted-text">None</span>'}
+              </td>
+              <td><span class="organizer-chip">${event.createdBy.name}</span></td>
+              <td>
+                <div class="admin-row-actions">
+                  <button class="btn btn-ghost" onclick="viewEvent('${event._id}')" title="View event">
                   <i class="fas fa-eye"></i>
-                </button>
-                <button class="btn btn-ghost" onclick="editEvent('${event._id}')">
+                  </button>
+                  <button class="btn btn-ghost" onclick="editEvent('${event._id}')" title="Edit event">
                   <i class="fas fa-edit"></i>
-                </button>
-                <button class="btn btn-ghost" onclick="deleteEvent('${event._id}')">
+                  </button>
+                  <button class="btn btn-ghost danger" onclick="deleteEvent('${event._id}')" title="Delete event">
                   <i class="fas fa-trash"></i>
-                </button>
+                  </button>
+                </div>
               </td>
             </tr>
-          `).join('')}
+          `;
+    }).join('')}
         </tbody>
       </table>
     </div>
@@ -704,7 +885,11 @@ function filterEvents(filter = 'all') {
             break;
         case 'my-events':
             if (currentUser) {
-                filteredEvents = events.filter((event) => event.volunteers.some(v => v._id === currentUser._id));
+                filteredEvents = events.filter((event) => {
+                    var _a;
+                    return event.volunteers.some(v => v._id === currentUser._id) ||
+                        ((_a = event.pendingVolunteers) === null || _a === void 0 ? void 0 : _a.some(v => v._id === currentUser._id));
+                });
             }
             else {
                 showLoginModal();
@@ -829,39 +1014,25 @@ function renderAdminStats() {
 }
 // Utility functions
 function updateUI() {
-    const becomeOrganizerBtn = document.getElementById('become-organizer-btn');
-    const exploreEventsBtn = document.getElementById('explore-events-btn');
     const guestHero = document.getElementById('guest-hero');
     const volunteerHero = document.getElementById('volunteer-hero');
     const adminHero = document.getElementById('admin-hero');
     const volunteerNameDisplay = document.getElementById('volunteer-name-display');
     const adminNameDisplay = document.getElementById('admin-name-display');
-
     if (currentUser) {
         loginBtn.style.display = 'none';
         registerBtn.style.display = 'none';
         userProfile.style.display = 'flex';
         userName.textContent = currentUser.name;
         dashboardLink.style.display = 'flex';
-
-        // Hide guest hero, show appropriate user hero
-        if (guestHero) guestHero.style.display = 'none';
-
         if (currentUser.role === 'admin') {
             adminLink.style.display = 'flex';
-            if (volunteerHero) volunteerHero.style.display = 'none';
-            if (adminHero) {
-                adminHero.style.display = 'block';
-                if (adminNameDisplay) adminNameDisplay.textContent = currentUser.name;
-            }
-        } else {
-            // Volunteer
-            if (adminHero) adminHero.style.display = 'none';
-            if (volunteerHero) {
-                volunteerHero.style.display = 'block';
-                if (volunteerNameDisplay) volunteerNameDisplay.textContent = currentUser.name;
-            }
         }
+        guestHero.style.display = 'none';
+        volunteerHero.style.display = currentUser.role === 'admin' ? 'none' : 'block';
+        adminHero.style.display = currentUser.role === 'admin' ? 'block' : 'none';
+        volunteerNameDisplay.textContent = currentUser.name;
+        adminNameDisplay.textContent = currentUser.name;
     }
     else {
         loginBtn.style.display = 'inline-flex';
@@ -869,13 +1040,40 @@ function updateUI() {
         userProfile.style.display = 'none';
         dashboardLink.style.display = 'none';
         adminLink.style.display = 'none';
-
-        // Show guest hero, hide user heroes
-        if (guestHero) guestHero.style.display = 'block';
-        if (volunteerHero) volunteerHero.style.display = 'none';
-        if (adminHero) adminHero.style.display = 'none';
+        guestHero.style.display = 'block';
+        volunteerHero.style.display = 'none';
+        adminHero.style.display = 'none';
     }
 }
+window.editUser = async (userId) => {
+    const users = window.adminUsers || [];
+    const user = users.find((item) => item._id === userId);
+    if (!user)
+        return;
+    const role = prompt('Enter role for this user: volunteer or admin', user.role);
+    if (!role || !['volunteer', 'admin'].includes(role))
+        return;
+    try {
+        await apiRequest(`/admin/users/${userId}`, 'PUT', { role });
+        showNotification('success', 'User Updated', 'The user role has been updated.');
+        loadAdminPanel();
+    }
+    catch (error) {
+        showNotification('error', 'Update Failed', error.message || 'Failed to update user');
+    }
+};
+window.deleteUser = async (userId) => {
+    if (!confirm('Are you sure you want to delete this user?'))
+        return;
+    try {
+        await apiRequest(`/admin/users/${userId}`, 'DELETE');
+        showNotification('success', 'User Deleted', 'The user has been removed.');
+        loadAdminPanel();
+    }
+    catch (error) {
+        showNotification('error', 'Delete Failed', error.message || 'Failed to delete user');
+    }
+};
 function showNotification(type, title, message) {
     const notification = document.createElement('div');
     notification.className = `notification ${type}`;
