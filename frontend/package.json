@@ -2,7 +2,7 @@
   "name": "volunteer-system-frontend",
   "version": "1.0.0",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-static.js",
     "start": "node server.js",
     "dev": "tsc --watch"
   },
