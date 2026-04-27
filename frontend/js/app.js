@@ -59,7 +59,26 @@ const adminTabs = document.querySelectorAll('.admin-tab');
 // Notifications container
 const notificationsContainer = document.getElementById('notifications');
 // API configuration
-const API_ORIGIN = 'http://localhost:5000';
+function resolveApiOrigin() {
+    var _a, _b;
+    const configuredOrigin = window.API_ORIGIN ||
+        ((_b = (_a = document.querySelector('meta[name="api-origin"]')) === null || _a === void 0 ? void 0 : _a.getAttribute('content')) === null || _b === void 0 ? void 0 : _b.trim());
+    if (configuredOrigin) {
+        return configuredOrigin.replace(/\/+$/, '');
+    }
+    const host = window.location.hostname;
+    if (host === 'localhost' || host === '127.0.0.1') {
+        return 'http://localhost:5000';
+    }
+    if (host.endsWith('.vercel.app')) {
+        // Vercel preview/prod URLs usually end with "-<suffix>.vercel.app";
+        // strip the suffix and try the matching Render service name.
+        const projectName = host.replace('.vercel.app', '').replace(/-[^-]+$/, '');
+        return `https://${projectName}.onrender.com`;
+    }
+    return window.location.origin;
+}
+const API_ORIGIN = resolveApiOrigin();
 const API_BASE = `${API_ORIGIN}/api`;
 // Initialize application
 document.addEventListener('DOMContentLoaded', init);
