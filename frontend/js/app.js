@@ -59,7 +59,8 @@ const adminTabs = document.querySelectorAll('.admin-tab');
 // Notifications container
 const notificationsContainer = document.getElementById('notifications');
 // API configuration
-const API_BASE = 'http://localhost:5000/api';
+const API_ORIGIN = 'http://localhost:5000';
+const API_BASE = `${API_ORIGIN}/api`;
 // Initialize application
 document.addEventListener('DOMContentLoaded', init);
 // Event listeners
@@ -145,7 +146,7 @@ function initializeSocket() {
         console.warn('Socket.IO client not available; continuing without real-time updates.');
         return;
     }
-    socket = window.io('http://localhost:5000');
+    socket = window.io(API_ORIGIN);
     socket.on('connect', () => {
         console.log('Connected to server');
     });

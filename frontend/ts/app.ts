@@ -112,7 +112,8 @@ const adminTabs = document.querySelectorAll('.admin-tab') as NodeListOf<HTMLButt
 const notificationsContainer = document.getElementById('notifications') as HTMLElement;
 
 // API configuration
-const API_BASE = 'http://localhost:5000/api';
+const API_ORIGIN = 'http://localhost:5000';
+const API_BASE = `${API_ORIGIN}/api`;
 
 // Initialize application
 document.addEventListener('DOMContentLoaded', init);
@@ -212,7 +213,7 @@ function initializeSocket(): void {
     return;
   }
 
-  socket = (window as any).io('http://localhost:5000');
+  socket = (window as any).io(API_ORIGIN);
 
   socket.on('connect', () => {
     console.log('Connected to server');
