@@ -11,10 +11,22 @@ const populateEvent = query => query
   .populate({ path: 'pendingVolunteers', select: 'name email role', match: { role: 'volunteer' } })
   .populate('createdBy', 'name email role');
 
+const isEventOwner = (event, userId) => event.createdBy.toString() === userId.toString();
+
 // Get all events (public for viewing)
 router.get('/', async (req, res) => {
   try {
     const events = await populateEvent(Event.find());
+    res.json(events);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Get events owned by logged-in admin
+router.get('/mine', auth, adminAuth, async (req, res) => {
+  try {
+    const events = await populateEvent(Event.find({ createdBy: req.user._id }));
     res.json(events);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -44,12 +56,19 @@ router.post('/', auth, adminAuth, validateEvent, async (req, res) => {
 // Update event (admin)
 router.put('/:id', auth, adminAuth, validateEvent, async (req, res) => {
   try {
-    const event = await Event.findByIdAndUpdate(req.params.id, req.body, { new: true })
+    const existingEvent = await Event.findById(req.params.id);
+    if (!existingEvent) return res.status(404).json({ message: 'Event not found' });
+    if (!isEventOwner(existingEvent, req.user._id)) {
+      return res.status(403).json({ message: 'You can only update your own events' });
+    }
+
+    const updates = { ...req.body };
+    delete updates.createdBy;
+
+    const event = await Event.findByIdAndUpdate(req.params.id, updates, { new: true })
       .populate('volunteers', 'name email role')
       .populate('pendingVolunteers', 'name email role')
       .populate('createdBy', 'name email role');
-
-    if (!event) return res.status(404).json({ message: 'Event not found' });
 
     // Emit real-time event
     const io = req.app.get('io');
@@ -64,8 +83,14 @@ router.put('/:id', auth, adminAuth, validateEvent, async (req, res) => {
 // Delete event (admin)
 router.delete('/:id', auth, adminAuth, async (req, res) => {
   try {
-    const event = await Event.findByIdAndDelete(req.params.id);
-    if (!event) return res.status(404).json({ message: 'Event not found' });
+    const event = await Event.findOneAndDelete({ _id: req.params.id, createdBy: req.user._id });
+    if (!event) {
+      const exists = await Event.exists({ _id: req.params.id });
+      if (exists) {
+        return res.status(403).json({ message: 'You can only delete your own events' });
+      }
+      return res.status(404).json({ message: 'Event not found' });
+    }
 
     // Emit real-time event
     const io = req.app.get('io');
@@ -82,6 +107,9 @@ router.post('/:id/assign/:volunteerId', auth, adminAuth, async (req, res) => {
   try {
     const event = await Event.findById(req.params.id);
     if (!event) return res.status(404).json({ message: 'Event not found' });
+    if (!isEventOwner(event, req.user._id)) {
+      return res.status(403).json({ message: 'You can only manage volunteers for your own events' });
+    }
 
     const user = await User.findById(req.params.volunteerId);
     if (!user || user.role !== 'volunteer') {
@@ -113,6 +141,9 @@ router.post('/:id/confirm/:volunteerId', auth, adminAuth, async (req, res) => {
   try {
     const event = await Event.findById(req.params.id);
     if (!event) return res.status(404).json({ message: 'Event not found' });
+    if (!isEventOwner(event, req.user._id)) {
+      return res.status(403).json({ message: 'You can only manage volunteers for your own events' });
+    }
 
     const user = await User.findById(req.params.volunteerId);
     if (!user || user.role !== 'volunteer') {
@@ -147,6 +178,9 @@ router.post('/:id/reject/:volunteerId', auth, adminAuth, async (req, res) => {
   try {
     const event = await Event.findById(req.params.id);
     if (!event) return res.status(404).json({ message: 'Event not found' });
+    if (!isEventOwner(event, req.user._id)) {
+      return res.status(403).json({ message: 'You can only manage volunteers for your own events' });
+    }
 
     event.pendingVolunteers = event.pendingVolunteers.filter(id => id.toString() !== req.params.volunteerId);
     await event.save();
@@ -166,6 +200,9 @@ router.post('/:id/remove/:volunteerId', auth, adminAuth, async (req, res) => {
   try {
     const event = await Event.findById(req.params.id);
     if (!event) return res.status(404).json({ message: 'Event not found' });
+    if (!isEventOwner(event, req.user._id)) {
+      return res.status(403).json({ message: 'You can only manage volunteers for your own events' });
+    }
 
     event.volunteers = event.volunteers.filter(id => id.toString() !== req.params.volunteerId);
     event.pendingVolunteers = event.pendingVolunteers.filter(id => id.toString() !== req.params.volunteerId);

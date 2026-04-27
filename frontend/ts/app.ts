@@ -34,6 +34,13 @@ interface NotificationData {
   message: string;
 }
 
+interface AdminVolunteerAssignment {
+  eventId: string;
+  eventTitle: string;
+  status: 'confirmed' | 'pending';
+  volunteer: User & { createdAt?: string };
+}
+
 // Global variables
 let currentUser: User | null = null;
 let token: string | null = null;
@@ -556,15 +563,49 @@ async function handleCreateEvent(e: Event): Promise<void> {
   e.preventDefault();
 
   const formData = new FormData(createEventForm);
+  const title = (formData.get('title') as string || '').trim();
+  const description = (formData.get('description') as string || '').trim();
+  const rawDate = (formData.get('date') as string || '').trim();
+  const rawStartTime = (formData.get('startTime') as string || '').trim();
+  const rawEndTime = (formData.get('endTime') as string || '').trim();
+  const location = (formData.get('location') as string || '').trim();
+  const requiredVolunteers = parseInt(formData.get('volunteers') as string, 10);
+
   const eventData = {
-    title: formData.get('title') as string,
-    description: formData.get('description') as string,
-    date: formData.get('date') as string,
-    startTime: formData.get('startTime') as string,
-    endTime: formData.get('endTime') as string,
-    location: formData.get('location') as string,
-    requiredVolunteers: parseInt(formData.get('volunteers') as string)
+    title,
+    description,
+    date: normalizeDateValue(rawDate),
+    startTime: normalizeTimeValue(rawStartTime),
+    endTime: normalizeTimeValue(rawEndTime),
+    location,
+    requiredVolunteers: Number.isFinite(requiredVolunteers) ? requiredVolunteers : 1
   };
+
+  if (eventData.title.length < 3) {
+    showNotification('error', 'Invalid Title', 'Title must be at least 3 characters.');
+    return;
+  }
+
+  if (eventData.location.length < 3) {
+    showNotification('error', 'Invalid Location', 'Location must be at least 3 characters.');
+    return;
+  }
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(eventData.date)) {
+    showNotification('error', 'Invalid Date', 'Please select a valid date.');
+    return;
+  }
+
+  if (!/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(eventData.startTime) ||
+      !/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(eventData.endTime)) {
+    showNotification('error', 'Invalid Time', 'Please select a valid start and end time.');
+    return;
+  }
+
+  if (eventData.requiredVolunteers < 1) {
+    showNotification('error', 'Invalid Volunteer Count', 'Required volunteers must be at least 1.');
+    return;
+  }
 
   const submitBtn = createEventForm.querySelector('.btn') as HTMLButtonElement;
   const btnText = submitBtn.querySelector('.btn-text') as HTMLElement;
@@ -674,12 +715,13 @@ async function handleCreateEvent(e: Event): Promise<void> {
 // Data loading functions
 async function loadStats(): Promise<void> {
   try {
-    const events = await apiRequest('/events', 'GET');
-    const normalizedEvents = normalizeEvents(events);
+    const normalizedEvents = currentUser?.role === 'admin'
+      ? await loadScopedAdminEvents()
+      : normalizeEvents(await apiRequest('/events', 'GET'));
     const uniqueOrgs = new Set(normalizedEvents.map((e: Event) => e.createdBy._id)).size;
     const totalVolunteers = normalizedEvents.reduce((sum: number, event: Event) => sum + event.volunteers.length, 0);
 
-    totalEventsStat.textContent = events.length.toString();
+    totalEventsStat.textContent = normalizedEvents.length.toString();
     totalVolunteersStat.textContent = totalVolunteers.toString();
     totalOrganizationsStat.textContent = uniqueOrgs.toString();
 
@@ -722,8 +764,9 @@ async function loadStats(): Promise<void> {
 
 async function loadEvents(): Promise<void> {
   try {
-    const events = await apiRequest('/events', 'GET');
-    const normalizedEvents = normalizeEvents(events);
+    const normalizedEvents = currentUser?.role === 'admin'
+      ? await loadScopedAdminEvents()
+      : normalizeEvents(await apiRequest('/events', 'GET'));
     (window as any).currentEvents = normalizedEvents;
     renderEvents(normalizedEvents);
   } catch (error) {
@@ -736,6 +779,23 @@ async function loadDashboard(): Promise<void> {
   if (!currentUser) return;
 
   try {
+    if (currentUser.role === 'admin') {
+      const events = await loadScopedAdminEvents();
+      renderAdminDashboardEvents(events);
+
+      const volunteerIds = events.reduce((allIds: string[], event: Event) => {
+        event.volunteers.forEach((volunteer: User) => allIds.push(volunteer._id));
+        return allIds;
+      }, []);
+      const uniqueVolunteers = new Set(volunteerIds);
+      const pendingCount = events.reduce((sum: number, event: Event) => sum + (event.pendingVolunteers?.length || 0), 0);
+
+      document.getElementById('events-participated')!.textContent = events.length.toString();
+      document.getElementById('hours-volunteered')!.textContent = uniqueVolunteers.size.toString();
+      document.getElementById('certificates-earned')!.textContent = pendingCount.toString();
+      return;
+    }
+
     const events = await apiRequest('/volunteers/events', 'GET');
     const normalizedEvents = normalizeEvents(events);
     const myEvents = normalizedEvents.filter((event: Event) =>
@@ -759,21 +819,33 @@ async function loadAdminPanel(): Promise<void> {
   if (!currentUser || currentUser.role !== 'admin') return;
 
   try {
-    const [events, users] = await Promise.all([
-      apiRequest('/events', 'GET'),
+    const [events, assignments] = await Promise.all([
+      loadScopedAdminEvents(),
       apiRequest('/admin/users', 'GET')
     ]);
-    const normalizedEvents = normalizeEvents(events);
 
-    renderAdminEvents(normalizedEvents);
-    (window as any).adminUsers = users;
-    (window as any).adminEvents = normalizedEvents;
-    (window as any).currentEvents = normalizedEvents;
+    renderAdminEvents(events);
+    (window as any).adminAssignments = assignments;
+    (window as any).adminEvents = events;
+    (window as any).currentEvents = events;
 
   } catch (error) {
     console.error('Failed to load admin data:', error);
     adminContent.innerHTML = '<p class="error">Failed to load admin data.</p>';
   }
+}
+
+async function loadScopedAdminEvents(): Promise<Event[]> {
+  if (!currentUser || currentUser.role !== 'admin') return [];
+
+  const events = await apiRequest('/admin/events', 'GET');
+  const normalizedEvents = normalizeEvents(events);
+
+  // Extra client-side safety for older backend instances.
+  return normalizedEvents.filter((event: Event) => {
+    const creatorId = typeof event.createdBy === 'string' ? event.createdBy : event.createdBy?._id;
+    return creatorId === currentUser!._id;
+  });
 }
 
 // Rendering functions
@@ -893,6 +965,51 @@ function renderMyEvents(events: Event[]): void {
       <div class="event-actions">
         <button class="btn btn-ghost" onclick="viewEvent('${event._id}')">View</button>
         <button class="btn btn-secondary" onclick="cancelEvent('${event._id}')">${isPending ? 'Cancel Request' : 'Cancel'}</button>
+      </div>
+    `;
+    myEventsList.appendChild(eventItem);
+  });
+}
+
+function renderAdminDashboardEvents(events: Event[]): void {
+  myEventsList.innerHTML = '';
+
+  if (events.length === 0) {
+    myEventsList.innerHTML = `
+      <div class="no-events">
+        <i class="fas fa-calendar-times"></i>
+        <h3>No events created yet</h3>
+        <p>Create an event to start managing volunteers.</p>
+      </div>
+    `;
+    return;
+  }
+
+  events.forEach(event => {
+    const eventItem = document.createElement('div');
+    eventItem.className = 'event-item';
+    eventItem.innerHTML = `
+      <div class="event-info">
+        <h4>${event.title}</h4>
+        <p>${formatDate(event.date)} - ${event.location}</p>
+        <span class="event-status inline joined">${event.volunteers.length} confirmed</span>
+        <span class="event-status inline pending">${event.pendingVolunteers?.length || 0} pending</span>
+        <div class="volunteers-list" style="margin-top: 10px;">
+          ${event.volunteers.length
+            ? event.volunteers.map((volunteer: User) => `
+                <span class="volunteer-tag">
+                  ${volunteer.name}
+                  <button class="btn btn-ghost btn-mini" title="Remove from event" onclick="removeVolunteerFromEvent('${event._id}', '${volunteer._id}')">
+                    <i class="fas fa-user-minus"></i>
+                  </button>
+                </span>
+              `).join('')
+            : '<span class="no-volunteers">No confirmed volunteers yet</span>'
+          }
+        </div>
+      </div>
+      <div class="event-actions">
+        <button class="btn btn-ghost" onclick="viewEvent('${event._id}')">View</button>
       </div>
     `;
     myEventsList.appendChild(eventItem);
@@ -1051,32 +1168,43 @@ function showAdminTab(tab: string): void {
 }
 
 function renderAdminUsers(): void {
-  const users = (window as any).adminUsers || [];
+  const assignments = ((window as any).adminAssignments || []) as AdminVolunteerAssignment[];
+
+  if (assignments.length === 0) {
+    adminContent.innerHTML = `
+      <div class="no-events">
+        <i class="fas fa-users-slash"></i>
+        <h3>No volunteers in your events</h3>
+        <p>Volunteers who join your events will appear here.</p>
+      </div>
+    `;
+    return;
+  }
+
   adminContent.innerHTML = `
     <div class="admin-users-table">
       <table>
         <thead>
           <tr>
-          <th>Name</th>
+          <th>Volunteer</th>
           <th>Email</th>
-          <th>Role</th>
+          <th>Event</th>
+          <th>Status</th>
           <th>Joined</th>
           <th>Actions</th>
         </tr>
       </thead>
       <tbody>
-        ${users.map((user: any) => `
+        ${assignments.map((assignment: AdminVolunteerAssignment) => `
           <tr>
-            <td>${user.name}</td>
-            <td>${user.email}</td>
-            <td><span class="role-badge ${user.role}">${user.role}</span></td>
-            <td>${formatDate(user.createdAt)}</td>
+            <td>${assignment.volunteer.name}</td>
+            <td>${assignment.volunteer.email}</td>
+            <td>${assignment.eventTitle}</td>
+            <td><span class="event-status inline ${assignment.status === 'pending' ? 'pending' : 'joined'}">${assignment.status}</span></td>
+            <td>${assignment.volunteer.createdAt ? formatDate(assignment.volunteer.createdAt) : '-'}</td>
             <td>
-              <button class="btn btn-ghost" onclick="editUser('${user._id}')">
-                <i class="fas fa-edit"></i>
-              </button>
-              <button class="btn btn-ghost" onclick="deleteUser('${user._id}')">
-                <i class="fas fa-trash"></i>
+              <button class="btn btn-ghost danger" title="Remove from event" onclick="removeVolunteerFromEvent('${assignment.eventId}', '${assignment.volunteer._id}')">
+                <i class="fas fa-user-minus"></i>
               </button>
             </td>
           </tr>
@@ -1089,11 +1217,11 @@ function renderAdminUsers(): void {
 
 function renderAdminStats(): void {
   const events = (window as any).adminEvents || [];
-  const users = (window as any).adminUsers || [];
+  const assignments = ((window as any).adminAssignments || []) as AdminVolunteerAssignment[];
 
   const totalEvents = events.length;
-  const totalVolunteers = users.filter((u: any) => u.role === 'volunteer').length;
-  const totalAdmins = users.filter((u: any) => u.role === 'admin').length;
+  const uniqueVolunteers = new Set(assignments.map((a: AdminVolunteerAssignment) => a.volunteer._id)).size;
+  const pendingRequests = assignments.filter((a: AdminVolunteerAssignment) => a.status === 'pending').length;
   const totalParticipants = events.reduce((sum: number, event: Event) => sum + event.volunteers.length, 0);
 
   adminContent.innerHTML = `
@@ -1113,17 +1241,17 @@ function renderAdminStats(): void {
             <i class="fas fa-users"></i>
           </div>
           <div class="stat-info">
-            <div class="stat-number">${totalVolunteers}</div>
-            <div class="stat-label">Volunteers</div>
+            <div class="stat-number">${uniqueVolunteers}</div>
+            <div class="stat-label">Unique Volunteers</div>
           </div>
         </div>
         <div class="stat-card">
           <div class="stat-icon">
-            <i class="fas fa-user-tie"></i>
+            <i class="fas fa-user-clock"></i>
           </div>
           <div class="stat-info">
-            <div class="stat-number">${totalAdmins}</div>
-            <div class="stat-label">Administrators</div>
+            <div class="stat-number">${pendingRequests}</div>
+            <div class="stat-label">Pending Requests</div>
           </div>
         </div>
         <div class="stat-card">
@@ -1178,32 +1306,15 @@ function updateUI(): void {
   }
 }
 
-(window as any).editUser = async (userId: string) => {
-  const users = (window as any).adminUsers || [];
-  const user = users.find((item: any) => item._id === userId);
-  if (!user) return;
-
-  const role = prompt('Enter role for this user: volunteer or admin', user.role);
-  if (!role || !['volunteer', 'admin'].includes(role)) return;
+(window as any).removeVolunteerFromEvent = async (eventId: string, volunteerId: string) => {
+  if (!confirm('Remove this volunteer from the selected event?')) return;
 
   try {
-    await apiRequest(`/admin/users/${userId}`, 'PUT', { role });
-    showNotification('success', 'User Updated', 'The user role has been updated.');
-    loadAdminPanel();
+    await apiRequest(`/events/${eventId}/remove/${volunteerId}`, 'POST');
+    showNotification('success', 'Volunteer Removed', 'The volunteer was removed from the event.');
+    await Promise.all([loadDashboard(), loadAdminPanel(), loadEvents(), loadStats()]);
   } catch (error: any) {
-    showNotification('error', 'Update Failed', error.message || 'Failed to update user');
-  }
-};
-
-(window as any).deleteUser = async (userId: string) => {
-  if (!confirm('Are you sure you want to delete this user?')) return;
-
-  try {
-    await apiRequest(`/admin/users/${userId}`, 'DELETE');
-    showNotification('success', 'User Deleted', 'The user has been removed.');
-    loadAdminPanel();
-  } catch (error: any) {
-    showNotification('error', 'Delete Failed', error.message || 'Failed to delete user');
+    showNotification('error', 'Remove Failed', error.message || 'Failed to remove volunteer from event');
   }
 };
 
@@ -1244,11 +1355,55 @@ async function apiRequest(endpoint: string, method: string = 'GET', data?: any):
   const response = await fetch(`${API_BASE}${endpoint}`, config);
 
   if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.message || 'API request failed');
+    const raw = await response.text();
+    let errorPayload: any = null;
+
+    try {
+      errorPayload = raw ? JSON.parse(raw) : null;
+    } catch {
+      errorPayload = null;
+    }
+
+    const validationErrors = Array.isArray(errorPayload?.errors)
+      ? errorPayload.errors.map((item: any) => item.msg).filter(Boolean)
+      : [];
+
+    const message =
+      errorPayload?.message ||
+      (validationErrors.length ? validationErrors.join(', ') : '') ||
+      raw ||
+      'API request failed';
+
+    throw new Error(message);
   }
 
   return response.json();
+}
+
+function normalizeDateValue(value: string): string {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const ddmmyyyy = value.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if (ddmmyyyy) {
+    const [, dd, mm, yyyy] = ddmmyyyy;
+    return `${yyyy}-${mm}-${dd}`;
+  }
+  return value;
+}
+
+function normalizeTimeValue(value: string): string {
+  if (/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(value)) return value;
+
+  const ampm = value.match(/^(\d{1,2}):([0-5]\d)\s*([AaPp][Mm])$/);
+  if (!ampm) return value;
+
+  let hours = parseInt(ampm[1], 10);
+  const minutes = ampm[2];
+  const suffix = ampm[3].toUpperCase();
+
+  if (suffix === 'PM' && hours !== 12) hours += 12;
+  if (suffix === 'AM' && hours === 12) hours = 0;
+
+  return `${hours.toString().padStart(2, '0')}:${minutes}`;
 }
 
 function formatDate(dateString: string): string {
